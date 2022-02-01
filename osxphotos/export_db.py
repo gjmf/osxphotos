@@ -113,6 +113,9 @@ class ExportDB_ABC(ABC):
     ):
         pass
 
+    def get_connection(self):
+        pass
+
 
 class ExportDBNoOp(ExportDB_ABC):
     """An ExportDB with NoOp methods"""
@@ -192,6 +195,9 @@ class ExportDBNoOp(ExportDB_ABC):
     ):
         pass
 
+    def get_connection(self):
+        pass
+
 
 class ExportDB(ExportDB_ABC):
     """Interface to sqlite3 database used to store state information for osxphotos export command"""
@@ -212,7 +218,7 @@ class ExportDB(ExportDB_ABC):
         returns None if filename not found in database
         """
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -229,7 +235,7 @@ class ExportDB(ExportDB_ABC):
         """set UUID of filename to uuid in the database"""
         filename = str(pathlib.Path(filename).relative_to(self._path))
         filename_normalized = filename.lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -249,7 +255,7 @@ class ExportDB(ExportDB_ABC):
         if len(stats) != 3:
             raise ValueError(f"expected 3 elements for stat, got {len(stats)}")
 
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -267,7 +273,7 @@ class ExportDB(ExportDB_ABC):
         returns: tuple of (mode, size, mtime)
         """
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -306,7 +312,7 @@ class ExportDB(ExportDB_ABC):
         if len(stats) != 3:
             raise ValueError(f"expected 3 elements for stat, got {len(stats)}")
 
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -324,7 +330,7 @@ class ExportDB(ExportDB_ABC):
         returns: tuple of (mode, size, mtime)
         """
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -357,7 +363,7 @@ class ExportDB(ExportDB_ABC):
 
     def get_info_for_uuid(self, uuid):
         """returns the info JSON struct for a UUID"""
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute("SELECT json_info FROM info WHERE uuid = ?", (uuid,))
@@ -371,7 +377,7 @@ class ExportDB(ExportDB_ABC):
 
     def set_info_for_uuid(self, uuid, info):
         """sets the info JSON struct for a UUID"""
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -385,7 +391,7 @@ class ExportDB(ExportDB_ABC):
     def get_exifdata_for_file(self, filename):
         """returns the exifdata JSON struct for a file"""
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -403,7 +409,7 @@ class ExportDB(ExportDB_ABC):
     def set_exifdata_for_file(self, filename, exifdata):
         """sets the exifdata JSON struct for a file"""
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -417,7 +423,7 @@ class ExportDB(ExportDB_ABC):
     def get_sidecar_for_file(self, filename):
         """returns the sidecar data and signature for a file"""
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -445,7 +451,7 @@ class ExportDB(ExportDB_ABC):
     def set_sidecar_for_file(self, filename, sidecar_data, sidecar_sig):
         """sets the sidecar data and signature for a file"""
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -458,7 +464,7 @@ class ExportDB(ExportDB_ABC):
 
     def get_previous_uuids(self):
         """returns list of UUIDs of previously exported photos found in export database"""
-        conn = self._conn
+        conn = self.get_connection()
         previous_uuids = []
         try:
             c = conn.cursor()
@@ -471,7 +477,7 @@ class ExportDB(ExportDB_ABC):
 
     def get_detected_text_for_uuid(self, uuid):
         """Get the detected_text for a uuid"""
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -488,7 +494,7 @@ class ExportDB(ExportDB_ABC):
 
     def set_detected_text_for_uuid(self, uuid, text_json):
         """Set the detected text for uuid"""
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(
@@ -516,7 +522,7 @@ class ExportDB(ExportDB_ABC):
         """sets all the data for file and uuid at once; if any value is None, does not set it"""
         filename = str(pathlib.Path(filename).relative_to(self._path))
         filename_normalized = filename.lower()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             # update files table (if needed);
@@ -572,16 +578,23 @@ class ExportDB(ExportDB_ABC):
     def close(self):
         """close the database connection"""
         try:
-            self._conn.close()
+            if self._conn:
+                self._conn.close()
+                self._conn = None
         except Error as e:
             logging.warning(e)
+
+    def get_connection(self):
+        if self._conn is None:
+            self._conn = self._open_export_db(self._dbfile)
+        return self._conn
 
     def _set_stat_for_file(self, table, filename, stats):
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
         if len(stats) != 3:
             raise ValueError(f"expected 3 elements for stat, got {len(stats)}")
 
-        conn = self._conn
+        conn = self.get_connection()
         c = conn.cursor()
         c.execute(
             f"INSERT OR REPLACE INTO {table}(filepath_normalized, mode, size, mtime) VALUES (?, ?, ?, ?);",
@@ -591,7 +604,7 @@ class ExportDB(ExportDB_ABC):
 
     def _get_stat_for_file(self, table, filename):
         filename = str(pathlib.Path(filename).relative_to(self._path)).lower()
-        conn = self._conn
+        conn = self.get_connection()
         c = conn.cursor()
         c.execute(
             f"SELECT mode, size, mtime FROM {table} WHERE filepath_normalized = ?",
@@ -770,7 +783,7 @@ class ExportDB(ExportDB_ABC):
         cmd = sys.argv[0]
         args = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else ""
         cwd = os.getcwd()
-        conn = self._conn
+        conn = self.get_connection()
         try:
             c = conn.cursor()
             c.execute(

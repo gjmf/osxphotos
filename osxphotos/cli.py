@@ -8,6 +8,7 @@ import dataclasses
 import datetime
 import io
 import json
+import multiprocessing as mp
 import os
 import os.path
 import pathlib
@@ -27,8 +28,10 @@ import osxmetadata
 import photoscript
 import rich.traceback
 import yaml
+from more_itertools import divide
 from rich import pretty, print
 from rich.console import Console
+from rich.progress import Progress
 from rich.syntax import Syntax
 
 import osxphotos
@@ -148,7 +151,7 @@ def verbose_(*args, **kwargs):
     """print output if verbose flag set"""
     if VERBOSE:
         styled_args = []
-        timestamp = str(datetime.datetime.now()) + " -- " if VERBOSE_TIMESTAMP else ""
+        timestamp = f"[{datetime.datetime.now()}] -- " if VERBOSE_TIMESTAMP else ""
         for arg in args:
             if type(arg) == str:
                 arg = timestamp + arg
@@ -1170,6 +1173,13 @@ def cli(ctx, db, json_, debug):
     type=click.Path(),
 )
 @click.option(
+    "--multiprocess",
+    "-M",
+    metavar="NUMBER_OF_PROCESSES",
+    help="Run export in parallel using NUMBER_OF_PROCESSES processes. ",
+    type=click.IntRange(min=1),
+)
+@click.option(
     "--beta",
     is_flag=True,
     default=False,
@@ -1338,6 +1348,7 @@ def export(
     preview_if_missing,
     profile,
     profile_sort,
+    multiprocess,
 ):
     """Export photos from the Photos database.
     Export path DEST is required.
@@ -1868,198 +1879,28 @@ def export(
     # store results of export
     results = ExportResults()
 
-    if photos:
+    if not photos:
+        click.echo("Did not find any photos to export")
+    else:
         num_photos = len(photos)
         # TODO: photos or photo appears several times, pull into a separate function
         photo_str = "photos" if num_photos > 1 else "photo"
         click.echo(f"Exporting {num_photos} {photo_str} to {dest}...")
         start_time = time.perf_counter()
-        # though the command line option is current_name, internally all processing
-        # logic uses original_name which is the boolean inverse of current_name
-        # because the original code used --original-name as an option
-        original_name = not current_name
-
-        # set up for --add-export-to-album if needed
-        album_export = (
-            PhotosAlbum(add_exported_to_album, verbose=verbose_)
-            if add_exported_to_album
-            else None
-        )
-        album_skipped = (
-            PhotosAlbum(add_skipped_to_album, verbose=verbose_)
-            if add_skipped_to_album
-            else None
-        )
-        album_missing = (
-            PhotosAlbum(add_missing_to_album, verbose=verbose_)
-            if add_missing_to_album
-            else None
-        )
-
-        photo_num = 0
-        # send progress bar output to /dev/null if verbose to hide the progress bar
-        fp = open(os.devnull, "w") if verbose else None
-        with click.progressbar(photos, show_pos=True, file=fp) as bar:
-            for p in bar:
-                photo_num += 1
-                export_results = export_photo(
-                    photo=p,
-                    dest=dest,
-                    verbose=verbose,
-                    export_by_date=export_by_date,
-                    sidecar=sidecar,
-                    sidecar_drop_ext=sidecar_drop_ext,
-                    update=update,
-                    ignore_signature=ignore_signature,
-                    export_as_hardlink=export_as_hardlink,
-                    overwrite=overwrite,
-                    export_edited=export_edited,
-                    skip_original_if_edited=skip_original_if_edited,
-                    original_name=original_name,
-                    export_live=export_live,
-                    download_missing=download_missing,
-                    exiftool=exiftool,
-                    exiftool_merge_keywords=exiftool_merge_keywords,
-                    exiftool_merge_persons=exiftool_merge_persons,
-                    directory=directory,
-                    filename_template=filename_template,
-                    export_raw=export_raw,
-                    album_keyword=album_keyword,
-                    person_keyword=person_keyword,
-                    keyword_template=keyword_template,
-                    description_template=description_template,
-                    export_db=export_db,
-                    fileutil=fileutil,
-                    dry_run=dry_run,
-                    touch_file=touch_file,
-                    edited_suffix=edited_suffix,
-                    original_suffix=original_suffix,
-                    use_photos_export=use_photos_export,
-                    convert_to_jpeg=convert_to_jpeg,
-                    jpeg_quality=jpeg_quality,
-                    ignore_date_modified=ignore_date_modified,
-                    use_photokit=use_photokit,
-                    exiftool_option=exiftool_option,
-                    strip=strip,
-                    jpeg_ext=jpeg_ext,
-                    replace_keywords=replace_keywords,
-                    retry=retry,
-                    export_dir=dest,
-                    export_preview=preview,
-                    preview_suffix=preview_suffix,
-                    preview_if_missing=preview_if_missing,
-                    photo_num=photo_num,
-                    num_photos=num_photos,
-                )
-
-                if post_function:
-                    for function in post_function:
-                        # post function is tuple of (function, filename.py::function_name)
-                        verbose_(f"Calling post-function {function[1]}")
-                        if not dry_run:
-                            try:
-                                function[0](p, export_results, verbose_)
-                            except Exception as e:
-                                click.secho(
-                                    f"Error running post-function {function[1]}: {e}",
-                                    fg=CLI_COLOR_ERROR,
-                                    err=True,
-                                )
-
-                run_post_command(
-                    photo=p,
-                    post_command=post_command,
-                    export_results=export_results,
-                    export_dir=dest,
-                    dry_run=dry_run,
-                    exiftool_path=exiftool_path,
-                    export_db=export_db,
-                )
-
-                if album_export and export_results.exported:
-                    try:
-                        album_export.add(p)
-                        export_results.exported_album = [
-                            (filename, album_export.name)
-                            for filename in export_results.exported
-                        ]
-                    except Exception as e:
-                        click.secho(
-                            f"Error adding photo {p.original_filename} ({p.uuid}) to album {album_export.name}: {e}",
-                            fg=CLI_COLOR_ERROR,
-                            err=True,
-                        )
-
-                if album_skipped and export_results.skipped:
-                    try:
-                        album_skipped.add(p)
-                        export_results.skipped_album = [
-                            (filename, album_skipped.name)
-                            for filename in export_results.skipped
-                        ]
-                    except Exception as e:
-                        click.secho(
-                            f"Error adding photo {p.original_filename} ({p.uuid}) to album {album_skipped.name}: {e}",
-                            fg=CLI_COLOR_ERROR,
-                            err=True,
-                        )
-
-                if album_missing and export_results.missing:
-                    try:
-                        album_missing.add(p)
-                        export_results.missing_album = [
-                            (filename, album_missing.name)
-                            for filename in export_results.missing
-                        ]
-                    except Exception as e:
-                        click.secho(
-                            f"Error adding photo {p.original_filename} ({p.uuid}) to album {album_missing.name}: {e}",
-                            fg=CLI_COLOR_ERROR,
-                            err=True,
-                        )
-
-                results += export_results
-
-                # all photo files (not including sidecars) that are part of this export set
-                # used below for applying Finder tags, etc.
-                photo_files = set(
-                    export_results.exported
-                    + export_results.new
-                    + export_results.updated
-                    + export_results.exif_updated
-                    + export_results.converted_to_jpeg
-                    + export_results.skipped
-                )
-
-                if finder_tag_keywords or finder_tag_template:
-                    tags_written, tags_skipped = write_finder_tags(
-                        p,
-                        photo_files,
-                        keywords=finder_tag_keywords,
-                        keyword_template=keyword_template,
-                        album_keyword=album_keyword,
-                        person_keyword=person_keyword,
-                        exiftool_merge_keywords=exiftool_merge_keywords,
-                        finder_tag_template=finder_tag_template,
-                        strip=strip,
-                        export_dir=dest,
-                    )
-                    results.xattr_written.extend(tags_written)
-                    results.xattr_skipped.extend(tags_skipped)
-
-                if xattr_template:
-                    xattr_written, xattr_skipped = write_extended_attributes(
-                        p,
-                        photo_files,
-                        xattr_template,
-                        strip=strip,
-                        export_dir=dest,
-                    )
-                    results.xattr_written.extend(xattr_written)
-                    results.xattr_skipped.extend(xattr_skipped)
-
-        if fp is not None:
-            fp.close()
+        if multiprocess:
+            results = _export_photos_with_multiprocessing(
+                photos, kwargs={**locals(), **globals()}
+            )
+        else:
+            # some hackery to get the arguments for export_photos
+            export_args = export_photos.__code__.co_varnames
+            results = export_photos(
+                **{
+                    k: v
+                    for k, v in {**locals(), **globals()}.items()
+                    if k in export_args
+                }
+            )
 
         photo_str_total = "photos" if len(photos) != 1 else "photo"
         if update:
@@ -2082,8 +1923,6 @@ def export(
         click.echo(summary)
         stop_time = time.perf_counter()
         click.echo(f"Elapsed time: {format_sec_to_hhmmss(stop_time-start_time)}")
-    else:
-        click.echo("Did not find any photos to export")
 
     # cleanup files and do report if needed
     if cleanup:
@@ -2124,16 +1963,102 @@ def export(
     export_db.close()
 
 
-def _export_with_profiler(args: Dict):
-    """ "Run export with cProfile"""
+def _export_photos_with_multiprocessing(photos: List, kwargs: Dict) -> ExportResults():
+    """Run export using multiple processes"""
     try:
-        args.pop("profile")
+        num_procs = kwargs.get("multiprocess")
     except KeyError:
-        pass
+        raise ValueError("_export_runner called without multiprocess param")
 
-    cProfile.runctx(
-        "_export(**args)", globals=globals(), locals=locals(), sort="tottime"
-    )
+    # build kwargs for export_photos
+    # keep only the params export_photos expects
+    export_args = export_photos.__code__.co_varnames
+    kwargs = {arg: value for arg, value in kwargs.items() if arg in export_args}
+    for arg in ["photosdb", "photos"]:
+        kwargs.pop(arg, None)
+    kwargs["photos"] = None
+
+    # can't pickle an open sqlite connection so ensure export_db is closed
+    export_db = kwargs.get("export_db")
+    export_db.close()
+
+    # verbose output?
+    verbose = kwargs.get("verbose", None)
+
+    # get list of uuids to pass to export_photos
+    uuids = [p.uuid for p in photos]
+    uuid_chunks = [list(chunk) for chunk in divide(num_procs, uuids)]
+
+    # create a queue to communicate with processes
+    q = mp.Queue()
+    processes = []
+    if len(uuid_chunks) < num_procs:
+        num_procs = len(uuid_chunks)
+    for i in range(num_procs):
+        kwargs = kwargs.copy()
+        kwargs["_mp_queue"] = q
+        kwargs["_mp_process_total"] = num_procs
+        kwargs["_mp_process_num"] = i
+        kwargs["_mp_uuids"] = uuid_chunks[i]
+        if not kwargs["_mp_uuids"]:
+            click.echo(f"Out of UUIDs to process, skipping process {i}")
+            continue
+        click.echo(f"Starting process number #{i}")
+        p = mp.Process(target=export_photos, kwargs=kwargs)
+        p.start()
+        processes.append(p)
+
+    class FakeProgress:
+        def __init__(self):
+            self.finished = False
+            self.console = Console()
+
+        def add_task(self, task, total):
+            pass
+
+        def update(self, task_id, completed):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, exc_traceback):
+            pass
+
+    progress_class = Progress if not verbose else FakeProgress
+    export_results = ExportResults()
+    with progress_class() as progress:
+        tasks = []
+        for i, p in enumerate(processes):
+            tasks.append(
+                progress.add_task(
+                    f"Process {i} ({len(uuid_chunks[i])} photos)...",
+                    total=len(uuid_chunks[i]),
+                )
+            )
+
+        while not progress.finished:
+            while True:
+                if not any(mp.active_children()):
+                    break
+                try:
+                    results = q.get(timeout=0.5)
+                    # print(results)
+                    if results[1] == "VERBOSE":
+                        progress.console.print(f"{results[0]}: {results[2]}")
+                        # verbose_(f"{results[0]}: {results[2]}")
+                    elif results[1] == "DONE":
+                        # click.echo(f"Process {results[0]} is done")
+                        export_results += ExportResults(**results[2])
+                        if isinstance(progress, FakeProgress):
+                            progress.finished = True
+                    elif results[1] == "PROGRESS":
+                        progress.update(tasks[results[0]], completed=results[2])
+                except Exception:
+                    pass
+
+    click.echo("All processes finished")
+    return export_results
 
 
 @cli.command()
@@ -2582,100 +2507,387 @@ def print_photo_info(photos, json=False):
             csv_writer.writerow(row)
 
 
+def export_photos(
+    add_exported_to_album,
+    add_missing_to_album,
+    add_skipped_to_album,
+    album_keyword,
+    convert_to_jpeg,
+    current_name,
+    db,
+    description_template,
+    dest,
+    directory,
+    download_missing,
+    dry_run,
+    edited_suffix,
+    exiftool_merge_keywords,
+    exiftool_merge_persons,
+    exiftool_option,
+    exiftool_path,
+    exiftool,
+    export_as_hardlink,
+    export_by_date,
+    export_db,
+    export_edited,
+    export_live,
+    export_raw,
+    filename_template,
+    fileutil,
+    finder_tag_keywords,
+    finder_tag_template,
+    ignore_date_modified,
+    ignore_signature,
+    jpeg_ext,
+    jpeg_quality,
+    keyword_template,
+    multiprocess,
+    original_suffix,
+    overwrite,
+    person_keyword,
+    photos,
+    post_command,
+    post_function,
+    preview_if_missing,
+    preview_suffix,
+    preview,
+    replace_keywords,
+    retry,
+    sidecar_drop_ext,
+    sidecar,
+    skip_original_if_edited,
+    strip,
+    touch_file,
+    update,
+    use_photokit,
+    use_photos_export,
+    verbose,
+    verbose_,
+    xattr_template,
+    _mp_uuids=None,
+    _mp_process_total=None,
+    _mp_process_num=None,
+    _mp_queue=None,
+    **kwargs,
+):
+    """export photos"""
+
+    # Need to pass the verbose_ method if for multiprocessing to work
+    _mp_verbose = None
+    if multiprocess:
+        _mp_queue.put(
+            [
+                _mp_process_num,
+                "START",
+                f"multiprocess mode: {_mp_process_num}, {_mp_process_total}",
+            ]
+        )
+
+        def _mp_verbose(*args, **kwargs):
+            _mp_queue.put([_mp_process_num, "VERBOSE", args])
+
+        verbose_ = _mp_verbose
+        photosdb = osxphotos.PhotosDB(db, verbose=verbose_)
+        verbose_(f"_mp_uuids: {len(_mp_uuids)}")
+        photos = photosdb.photos_by_uuid(_mp_uuids)
+        verbose_(f"photos: {len(photos)}")
+
+    results = ExportResults()
+    num_photos = len(photos)
+    # though the command line option is current_name, internally all processing
+    # logic uses original_name which is the boolean inverse of current_name
+    # because the original code used --original-name as an option
+    original_name = not current_name
+
+    # set up for --add-export-to-album if needed
+    album_export = (
+        PhotosAlbum(add_exported_to_album, verbose=verbose_)
+        if add_exported_to_album
+        else None
+    )
+    album_skipped = (
+        PhotosAlbum(add_skipped_to_album, verbose=verbose_)
+        if add_skipped_to_album
+        else None
+    )
+    album_missing = (
+        PhotosAlbum(add_missing_to_album, verbose=verbose_)
+        if add_missing_to_album
+        else None
+    )
+
+    photo_num = 0
+    # send progress bar output to /dev/null if verbose or multiprocess to hide the progress bar
+    fp = open(os.devnull, "w") if verbose or multiprocess else None
+    with click.progressbar(photos, show_pos=True, file=fp) as bar:
+        for p in bar:
+            photo_num += 1
+            if multiprocess:
+                _mp_queue.put([_mp_process_num, "PROGRESS", photo_num, num_photos])
+            export_results = export_photo(
+                photo=p,
+                dest=dest,
+                album_keyword=album_keyword,
+                convert_to_jpeg=convert_to_jpeg,
+                description_template=description_template,
+                directory=directory,
+                download_missing=download_missing,
+                dry_run=dry_run,
+                edited_suffix=edited_suffix,
+                exiftool_merge_keywords=exiftool_merge_keywords,
+                exiftool_merge_persons=exiftool_merge_persons,
+                exiftool_option=exiftool_option,
+                exiftool=exiftool,
+                export_as_hardlink=export_as_hardlink,
+                export_by_date=export_by_date,
+                export_db=export_db,
+                export_dir=dest,
+                export_edited=export_edited,
+                export_live=export_live,
+                export_preview=preview,
+                export_raw=export_raw,
+                filename_template=filename_template,
+                fileutil=fileutil,
+                ignore_date_modified=ignore_date_modified,
+                ignore_signature=ignore_signature,
+                jpeg_ext=jpeg_ext,
+                jpeg_quality=jpeg_quality,
+                keyword_template=keyword_template,
+                num_photos=num_photos,
+                original_name=original_name,
+                original_suffix=original_suffix,
+                overwrite=overwrite,
+                person_keyword=person_keyword,
+                photo_num=photo_num,
+                preview_if_missing=preview_if_missing,
+                preview_suffix=preview_suffix,
+                replace_keywords=replace_keywords,
+                retry=retry,
+                sidecar_drop_ext=sidecar_drop_ext,
+                sidecar=sidecar,
+                skip_original_if_edited=skip_original_if_edited,
+                strip=strip,
+                touch_file=touch_file,
+                update=update,
+                use_photokit=use_photokit,
+                use_photos_export=use_photos_export,
+                verbose_=verbose_,
+                verbose=verbose,
+                _mp_verbose=_mp_verbose,
+            )
+
+            if post_function:
+                for function in post_function:
+                    # post function is tuple of (function, filename.py::function_name)
+                    verbose_(f"Calling post-function {function[1]}")
+                    if not dry_run:
+                        try:
+                            function[0](p, export_results, verbose_)
+                        except Exception as e:
+                            click.secho(
+                                f"Error running post-function {function[1]}: {e}",
+                                fg=CLI_COLOR_ERROR,
+                                err=True,
+                            )
+
+            run_post_command(
+                photo=p,
+                post_command=post_command,
+                export_results=export_results,
+                export_dir=dest,
+                dry_run=dry_run,
+                exiftool_path=exiftool_path,
+                export_db=export_db,
+            )
+
+            if album_export and export_results.exported:
+                try:
+                    album_export.add(p)
+                    export_results.exported_album = [
+                        (filename, album_export.name)
+                        for filename in export_results.exported
+                    ]
+                except Exception as e:
+                    click.secho(
+                        f"Error adding photo {p.original_filename} ({p.uuid}) to album {album_export.name}: {e}",
+                        fg=CLI_COLOR_ERROR,
+                        err=True,
+                    )
+
+            if album_skipped and export_results.skipped:
+                try:
+                    album_skipped.add(p)
+                    export_results.skipped_album = [
+                        (filename, album_skipped.name)
+                        for filename in export_results.skipped
+                    ]
+                except Exception as e:
+                    click.secho(
+                        f"Error adding photo {p.original_filename} ({p.uuid}) to album {album_skipped.name}: {e}",
+                        fg=CLI_COLOR_ERROR,
+                        err=True,
+                    )
+
+            if album_missing and export_results.missing:
+                try:
+                    album_missing.add(p)
+                    export_results.missing_album = [
+                        (filename, album_missing.name)
+                        for filename in export_results.missing
+                    ]
+                except Exception as e:
+                    click.secho(
+                        f"Error adding photo {p.original_filename} ({p.uuid}) to album {album_missing.name}: {e}",
+                        fg=CLI_COLOR_ERROR,
+                        err=True,
+                    )
+
+            results += export_results
+
+            # all photo files (not including sidecars) that are part of this export set
+            # used below for applying Finder tags, etc.
+            photo_files = set(
+                export_results.exported
+                + export_results.new
+                + export_results.updated
+                + export_results.exif_updated
+                + export_results.converted_to_jpeg
+                + export_results.skipped
+            )
+
+            if finder_tag_keywords or finder_tag_template:
+                tags_written, tags_skipped = write_finder_tags(
+                    p,
+                    photo_files,
+                    keywords=finder_tag_keywords,
+                    keyword_template=keyword_template,
+                    album_keyword=album_keyword,
+                    person_keyword=person_keyword,
+                    exiftool_merge_keywords=exiftool_merge_keywords,
+                    finder_tag_template=finder_tag_template,
+                    strip=strip,
+                    export_dir=dest,
+                )
+                results.xattr_written.extend(tags_written)
+                results.xattr_skipped.extend(tags_skipped)
+
+            if xattr_template:
+                xattr_written, xattr_skipped = write_extended_attributes(
+                    p,
+                    photo_files,
+                    xattr_template,
+                    strip=strip,
+                    export_dir=dest,
+                )
+                results.xattr_written.extend(xattr_written)
+                results.xattr_skipped.extend(xattr_skipped)
+
+    if fp is not None:
+        fp.close()
+
+    if multiprocess:
+        _mp_queue.put([_mp_process_num, "DONE", results.asdict()])
+    else:
+        return results
+
+
 def export_photo(
     photo=None,
     dest=None,
-    verbose=None,
-    export_by_date=None,
-    sidecar=None,
-    sidecar_drop_ext=False,
-    update=None,
-    ignore_signature=None,
-    export_as_hardlink=None,
-    overwrite=None,
-    export_edited=None,
-    skip_original_if_edited=None,
-    original_name=None,
-    export_live=None,
+    album_keyword=None,
+    convert_to_jpeg=False,
+    description_template=None,
+    directory=None,
     download_missing=None,
-    exiftool=None,
+    dry_run=None,
+    edited_suffix="_edited",
     exiftool_merge_keywords=False,
     exiftool_merge_persons=False,
-    directory=None,
-    filename_template=None,
-    export_raw=None,
-    album_keyword=None,
-    person_keyword=None,
-    keyword_template=None,
-    description_template=None,
-    export_db=None,
-    fileutil=FileUtil,
-    dry_run=None,
-    touch_file=None,
-    edited_suffix="_edited",
-    original_suffix="",
-    use_photos_export=False,
-    convert_to_jpeg=False,
-    jpeg_quality=1.0,
-    ignore_date_modified=False,
-    use_photokit=False,
     exiftool_option=None,
-    strip=False,
+    exiftool=None,
+    export_as_hardlink=None,
+    export_by_date=None,
+    export_db=None,
+    export_dir=None,
+    export_edited=None,
+    export_live=None,
+    export_preview=False,
+    export_raw=None,
+    filename_template=None,
+    fileutil=FileUtil,
+    ignore_date_modified=False,
+    ignore_signature=None,
     jpeg_ext=None,
+    jpeg_quality=1.0,
+    keyword_template=None,
+    num_photos=1,
+    original_name=None,
+    original_suffix="",
+    overwrite=None,
+    person_keyword=None,
+    photo_num=1,
+    preview_if_missing=False,
+    preview_suffix=None,
     replace_keywords=False,
     retry=0,
-    export_dir=None,
-    export_preview=False,
-    preview_suffix=None,
-    preview_if_missing=False,
-    photo_num=1,
-    num_photos=1,
+    sidecar_drop_ext=False,
+    sidecar=None,
+    skip_original_if_edited=None,
+    strip=False,
+    touch_file=None,
+    update=None,
+    use_photokit=False,
+    use_photos_export=False,
+    verbose_=None,
+    verbose=None,
+    _mp_verbose=None,
 ):
     """Helper function for export that does the actual export
 
     Args:
         photo: PhotoInfo object
         dest: destination path as string
-        verbose: boolean; print verbose output
-        export_by_date: boolean; create export folder in form dest/YYYY/MM/DD
-        sidecar: list zero, 1 or 2 of ["json","xmp"] of sidecar variety to export
-        sidecar_drop_ext: boolean; if True, drops photo extension from sidecar name
-        export_as_hardlink: boolean; hardlink files instead of copying them
-        overwrite: boolean; overwrite dest file if it already exists
-        original_name: boolean; use original filename instead of current filename
-        export_live: boolean; also export live video component if photo is a live photo
-                     live video will have same name as photo but with .mov extension
-        download_missing: attempt download of missing iCloud photos
-        exiftool: use exiftool to write EXIF metadata directly to exported photo
-        directory: template used to determine output directory
-        filename_template: template use to determine output file
-        export_raw: boolean; if True exports raw image associate with the photo
-        export_edited: boolean; if True exports edited version of photo if there is one
-        skip_original_if_edited: boolean; if True does not export original if photo has been edited
         album_keyword: boolean; if True, exports album names as keywords in metadata
-        person_keyword: boolean; if True, exports person names as keywords in metadata
-        keyword_template: list of strings; if provided use rendered template strings as keywords
-        description_template: string; optional template string that will be rendered for use as photo description
-        export_db: export database instance compatible with ExportDB_ABC
-        fileutil: file util class compatible with FileUtilABC
-        dry_run: boolean; if True, doesn't actually export or update any files
-        touch_file: boolean; sets file's modification time to match photo date
-        use_photos_export: boolean; if True forces the use of AppleScript to export even if photo not missing
         convert_to_jpeg: boolean; if True, converts non-jpeg images to jpeg
-        jpeg_quality: float in range 0.0 <= jpeg_quality <= 1.0.  A value of 1.0 specifies use best quality, a value of 0.0 specifies use maximum compression.
-        ignore_date_modified: if True, sets EXIF:ModifyDate to EXIF:DateTimeOriginal even if date_modified is set
-        exiftool_option: optional list flags (e.g. ["-m", "-F"]) to pass to exiftool
+        description_template: string; optional template string that will be rendered for use as photo description
+        directory: template used to determine output directory
+        download_missing: attempt download of missing iCloud photos
+        dry_run: boolean; if True, doesn't actually export or update any files
         exiftool_merge_keywords: boolean; if True, merged keywords found in file's exif data (requires exiftool)
         exiftool_merge_persons: boolean; if True, merged persons found in file's exif data (requires exiftool)
+        exiftool_option: optional list flags (e.g. ["-m", "-F"]) to pass to exiftool
+        exiftool: use exiftool to write EXIF metadata directly to exported photo
+        export_as_hardlink: boolean; hardlink files instead of copying them
+        export_by_date: boolean; create export folder in form dest/YYYY/MM/DD
+        export_db: export database instance compatible with ExportDB_ABC
+        export_dir: top-level export directory for {export_dir} template
+        export_edited: boolean; if True exports edited version of photo if there is one
+        export_live: boolean; also export live video component if photo is a live photo; live video will have same name as photo but with .mov extension
+        export_preview: export the preview image generated by Photos
+        export_raw: boolean; if True exports raw image associate with the photo
+        filename_template: template use to determine output file
+        fileutil: file util class compatible with FileUtilABC
+        ignore_date_modified: if True, sets EXIF:ModifyDate to EXIF:DateTimeOriginal even if date_modified is set
         jpeg_ext: if not None, specify the extension to use for all JPEG images on export
+        jpeg_quality: float in range 0.0 <= jpeg_quality <= 1.0.  A value of 1.0 specifies use best quality, a value of 0.0 specifies use maximum compression.
+        keyword_template: list of strings; if provided use rendered template strings as keywords
+        num_photos: int, total number of photos that will be exported
+        original_name: boolean; use original filename instead of current filename
+        overwrite: boolean; overwrite dest file if it already exists
+        person_keyword: boolean; if True, exports person names as keywords in metadata
+        photo_num: int, which number photo in total of num_photos is being exported
+        preview_if_missing: bool, export preview if original is missing
+        preview_suffix: str, template to use as suffix for preview images
         replace_keywords: if True, --keyword-template replaces keywords instead of adding keywords
         retry: retry up to retry # of times if there's an error
-        export_dir: top-level export directory for {export_dir} template
-        export_preview: export the preview image generated by Photos
-        preview_suffix: str, template to use as suffix for preview images
-        preview_if_missing: bool, export preview if original is missing
-        photo_num: int, which number photo in total of num_photos is being exported
-        num_photos: int, total number of photos that will be exported
+        sidecar_drop_ext: boolean; if True, drops photo extension from sidecar name
+        sidecar: list zero, 1 or 2 of ["json","xmp"] of sidecar variety to export
+        skip_original_if_edited: boolean; if True does not export original if photo has been edited
+        touch_file: boolean; sets file's modification time to match photo date
+        use_photos_export: boolean; if True forces the use of AppleScript to export even if photo not missing
+        verbose_: Callable; verbose output function
+        verbose: bool; print verbose output
+        _mp_verbose: Callable; print verbose output for multiprocessing
 
     Returns:
         list of path(s) of exported photo or None if photo was missing
@@ -2683,8 +2895,7 @@ def export_photo(
     Raises:
         ValueError on invalid filename_template
     """
-    global VERBOSE
-    VERBOSE = bool(verbose)
+    verbose_ = _mp_verbose or verbose_
 
     export_original = not (skip_original_if_edited and photo.hasadjustments)
 
@@ -2801,11 +3012,12 @@ def export_photo(
             )
 
             results += export_photo_to_directory(
+                photo=photo,
+                dest=dest,
                 album_keyword=album_keyword,
                 convert_to_jpeg=convert_to_jpeg,
                 description_template=description_template,
                 dest_path=dest_path,
-                dest=dest,
                 download_missing=download_missing,
                 dry_run=dry_run,
                 edited=False,
@@ -2830,7 +3042,6 @@ def export_photo(
                 missing=missing_original,
                 overwrite=overwrite,
                 person_keyword=person_keyword,
-                photo=photo,
                 preview_if_missing=preview_if_missing,
                 preview_suffix=rendered_preview_suffix,
                 replace_keywords=replace_keywords,
@@ -2839,9 +3050,11 @@ def export_photo(
                 sidecar_flags=sidecar_flags,
                 touch_file=touch_file,
                 update=update,
-                use_photos_export=use_photos_export,
                 use_photokit=use_photokit,
+                use_photos_export=use_photos_export,
+                verbose_=verbose_,
                 verbose=verbose,
+                _mp_verbose=_mp_verbose,
             )
 
     if export_edited and photo.hasadjustments:
@@ -2913,11 +3126,12 @@ def export_photo(
                 )
 
                 results += export_photo_to_directory(
+                    photo=photo,
+                    dest=dest,
                     album_keyword=album_keyword,
                     convert_to_jpeg=convert_to_jpeg,
                     description_template=description_template,
                     dest_path=dest_path,
-                    dest=dest,
                     download_missing=download_missing,
                     dry_run=dry_run,
                     edited=True,
@@ -2942,7 +3156,6 @@ def export_photo(
                     missing=missing_edited,
                     overwrite=overwrite,
                     person_keyword=person_keyword,
-                    photo=photo,
                     preview_if_missing=preview_if_missing,
                     preview_suffix=rendered_preview_suffix,
                     replace_keywords=replace_keywords,
@@ -2951,9 +3164,11 @@ def export_photo(
                     sidecar_flags=sidecar_flags if not export_original else 0,
                     touch_file=touch_file,
                     update=update,
-                    use_photos_export=use_photos_export,
                     use_photokit=use_photokit,
+                    use_photos_export=use_photos_export,
+                    verbose_=verbose_,
                     verbose=verbose,
+                    _mp_verbose=_mp_verbose,
                 )
 
     return results
@@ -3037,8 +3252,12 @@ def export_photo_to_directory(
     use_photos_export,
     use_photokit,
     verbose,
+    verbose_,
+    _mp_verbose=None,
 ):
     """Export photo to directory dest_path"""
+    # Need to pass the verbose_ method if for multiprocessing to work
+    verbose_ = _mp_verbose or verbose_
 
     results = ExportResults()
     # TODO: can be updated to let export do all the missing logic
@@ -4112,11 +4331,13 @@ def _list_libraries(json_=False, error=True):
     default=False,
     help="Include filename of selected photos in output",
 )
-def uuid(ctx, cli_obj, filename):
+def uuid_(ctx, cli_obj, filename):
     """Print out unique IDs (UUID) of photos selected in Photos
 
     Prints outs UUIDs in form suitable for --uuid-from-file and --skip-uuid-from-file
     """
+    # Note: This is named uuid_ because multiprocessing complains about use of photo.uuid if
+    # this function is also called uuid.  Something weird happenign with pickling.
     for photo in photoscript.PhotosLibrary().selection:
         if filename:
             print(f"# {photo.filename}")

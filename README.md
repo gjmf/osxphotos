@@ -1180,6 +1180,9 @@ Options:
   --save-config <config file path>
                                   Save options to file for use with --load-
                                   config. File format is TOML.
+  -M, --multiprocess NUMBER_OF_PROCESSES
+                                  Run export in parallel using
+                                  NUMBER_OF_PROCESSES processes.   [x>=1]
   --help                          Show this message and exit.
 
 ** Export **

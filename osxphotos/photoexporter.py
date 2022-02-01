@@ -348,6 +348,34 @@ class ExportResults:
             + ")"
         )
 
+    def asdict(self):
+        """Return dict instance of class"""
+        return {
+            "exported": self.exported,
+            "new": self.new,
+            "updated": self.updated,
+            "skipped": self.skipped,
+            "exif_updated": self.exif_updated,
+            "touched": self.touched,
+            "to_touch": self.to_touch,
+            "converted_to_jpeg": self.converted_to_jpeg,
+            "sidecar_json_written": self.sidecar_json_written,
+            "sidecar_json_skipped": self.sidecar_json_skipped,
+            "sidecar_exiftool_written": self.sidecar_exiftool_written,
+            "sidecar_exiftool_skipped": self.sidecar_exiftool_skipped,
+            "sidecar_xmp_written": self.sidecar_xmp_written,
+            "sidecar_xmp_skipped": self.sidecar_xmp_skipped,
+            "missing": self.missing,
+            "error": self.error,
+            "exiftool_warning": self.exiftool_warning,
+            "exiftool_error": self.exiftool_error,
+            "deleted_files": self.deleted_files,
+            "deleted_directories": self.deleted_directories,
+            "exported_album": self.exported_album,
+            "skipped_album": self.skipped_album,
+            "missing_album": self.missing_album,
+        }
+
 
 class PhotoExporter:
     def __init__(self, photo: "PhotoInfo"):
