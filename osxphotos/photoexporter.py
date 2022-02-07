@@ -3,7 +3,6 @@
 
 
 import dataclasses
-import glob
 import hashlib
 import json
 import logging
@@ -33,7 +32,7 @@ from ._constants import (
 )
 from ._version import __version__
 from .datetime_utils import datetime_tz_to_utc
-from .exiftool import ExifTool
+from .exiftool import ExifTool, exiftool_can_write
 from .export_db import ExportDB_ABC, ExportDBNoOp
 from .fileutil import FileUtil
 from .photokit import (
@@ -45,7 +44,7 @@ from .photokit import (
 )
 from .phototemplate import RenderOptions
 from .uti import get_preferred_uti_extension
-from .utils import increment_filename, increment_filename_with_count, lineno
+from .utils import increment_filename, lineno, list_directory
 
 __all__ = [
     "ExportError",
@@ -536,7 +535,7 @@ class PhotoExporter:
             preview_name = (
                 preview_name
                 if options.overwrite or options.update
-                else pathlib.Path(increment_filename(preview_name))
+                else pathlib.Path(increment_filename(preview_name, lock=True))
             )
             all_results += self._export_photo(
                 preview_path,
@@ -548,6 +547,13 @@ class PhotoExporter:
 
         if options.touch_file:
             all_results += self._touch_files(all_results, options)
+
+        # if src was missing, there will be a lock file for dest that needs cleaning up
+        try:
+            lock_file = dest.parent / f".{dest.name}.lock"
+            self.fileutil.unlink(lock_file)
+        except Exception:
+            pass
 
         return all_results
 
@@ -607,7 +613,9 @@ class PhotoExporter:
         # if file1.png exists and exporting file1.jpeg,
         # dest will be file1 (1).jpeg even though file1.jpeg doesn't exist to prevent sidecar collision
         if options.increment and not options.update and not options.overwrite:
-            return pathlib.Path(increment_filename(dest))
+            return pathlib.Path(
+                increment_filename(dest, lock=True, dry_run=options.dry_run)
+            )
 
         # if update and file exists, need to check to see if it's the write file by checking export db
         if options.update and dest.exists() and src:
@@ -626,9 +634,13 @@ class PhotoExporter:
                 )
             if dest_uuid != self.photo.uuid:
                 # not the right file, find the right one
-                glob_str = str(dest.parent / f"{dest.stem} (*{dest.suffix}")
-                # TODO: use the normalized code in utils
-                dest_files = glob.glob(glob_str)
+                # find files that match "dest_name (*.ext" (e.g. "dest_name (1).jpg", "dest_name (2).jpg)", ...)
+                dest_files = list_directory(
+                    dest.parent,
+                    startswith=f"{dest.stem} (",
+                    endswith=dest.suffix,
+                    include_path=True,
+                )
                 for file_ in dest_files:
                     dest_uuid = export_db.get_uuid_for_file(file_)
                     if dest_uuid == self.photo.uuid:
@@ -646,7 +658,9 @@ class PhotoExporter:
                         break
                 else:
                     # increment the destination file
-                    dest = pathlib.Path(increment_filename(dest))
+                    dest = pathlib.Path(
+                        increment_filename(dest, lock=True, dry_run=options.dry_run)
+                    )
 
         # either dest was updated in the if clause above or not updated at all
         return dest
@@ -840,7 +854,9 @@ class PhotoExporter:
             raise ValueError("Edited version requested but photo has no adjustments")
 
         dest = self._temp_dir_path / self.photo.original_filename
-        dest = pathlib.Path(increment_filename(dest))
+        dest = pathlib.Path(
+            increment_filename(dest, lock=True, dry_run=options.dry_run)
+        )
 
         # export live_photo .mov file?
         live_photo = bool(options.live_photo and self.photo.live_photo)
@@ -940,7 +956,7 @@ class PhotoExporter:
         """Copies filepath to a temp file preserving access and modification times"""
         filepath = pathlib.Path(filepath)
         dest = self._temp_dir_path / filepath.name
-        dest = increment_filename(dest)
+        dest = increment_filename(dest, lock=True)
         self.fileutil.copy(filepath, dest)
         stat = os.stat(filepath)
         self.fileutil.utime(dest, (stat.st_atime, stat.st_mtime))
@@ -1105,7 +1121,9 @@ class PhotoExporter:
                     # convert to a temp file before copying
                     tmp_file = increment_filename(
                         self._temp_dir_path
-                        / f"{pathlib.Path(src).stem}_converted_to_jpeg.jpeg"
+                        / f"{pathlib.Path(src).stem}_converted_to_jpeg.jpeg",
+                        lock=True,
+                        dry_run=options.dry_run,
                     )
                     fileutil.convert_to_jpeg(
                         src, tmp_file, compression_quality=options.jpeg_quality
@@ -1135,6 +1153,20 @@ class PhotoExporter:
             edited_stat=edited_stat,
             info_json=self.photo.json(),
         )
+
+        # clean up lock files
+        for file_ in set(
+            converted_to_jpeg_files
+            + exported_files
+            + update_new_files
+            + update_updated_files
+        ):
+            try:
+                file_ = pathlib.Path(file_)
+                lock_file = str(file_.parent / f".{file_.name}.lock")
+                fileutil.unlink(lock_file)
+            except Exception:
+                pass
 
         return ExportResults(
             converted_to_jpeg=converted_to_jpeg_files,
@@ -1284,11 +1316,27 @@ class PhotoExporter:
 
         exiftool_results = ExportResults()
 
+        # don't try to write if unsupported file type for exiftool
+        if not exiftool_can_write(os.path.splitext(src)[-1]):
+            exiftool_results.exiftool_warning.append(
+                (
+                    dest,
+                    f"Unsupported file type for exiftool, skipping exiftool for {dest}",
+                )
+            )
+            # set file signature so the file doesn't get re-exported with --update
+            export_db.set_data(
+                dest,
+                uuid=self.photo.uuid,
+                exif_stat=fileutil.file_sig(src),
+                exif_json=self._exiftool_json_sidecar(options=options),
+            )
+            return exiftool_results
+
         # determine if we need to write the exif metadata
         # if we are not updating, we always write
         # else, need to check the database to determine if we need to write
         run_exiftool = not options.update
-        current_data = "foo"
         if options.update:
             files_are_different = False
             old_data = export_db.get_exifdata_for_file(dest)
@@ -1856,7 +1904,7 @@ def _export_photo_uuid_applescript(
         raise ValueError(f"dest {dest} must be a directory")
 
     if not original ^ edited:
-        raise ValueError(f"edited or original must be True but not both")
+        raise ValueError("edited or original must be True but not both")
 
     tmpdir = tempfile.TemporaryDirectory(prefix="osxphotos_")
 
@@ -1879,7 +1927,6 @@ def _export_photo_uuid_applescript(
     if not exported_files or not filename:
         # nothing got exported
         raise ExportError(f"Could not export photo {uuid} ({lineno(__file__)})")
-
     # need to find actual filename as sometimes Photos renames JPG to jpeg on export
     # may be more than one file exported (e.g. if Live Photo, Photos exports both .jpeg and .mov)
     # TemporaryDirectory will cleanup on return

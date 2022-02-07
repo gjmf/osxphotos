@@ -140,7 +140,6 @@ def test_export_edited_exiftool(photosdb):
     got_dest = photos[0].export(
         dest, use_photos_export=True, edited=True, exiftool=True
     )
-    logging.warning(got_dest)
     got_dest = got_dest[0]
 
     assert os.path.isfile(got_dest)

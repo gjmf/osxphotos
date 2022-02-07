@@ -214,7 +214,8 @@ SEARCH_CATEGORY_PHOTO_NAME = 2056
 
 
 # Max filename length on MacOS
-MAX_FILENAME_LEN = 255
+# subtract 6 chars for the lock file extension in form: ".filename.lock"
+MAX_FILENAME_LEN = 255 - 6
 
 # Max directory name length on MacOS
 MAX_DIRNAME_LEN = 255
