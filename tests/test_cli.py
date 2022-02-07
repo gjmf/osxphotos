@@ -1446,6 +1446,7 @@ def test_query_exif_case_insensitive(exiftag, exifvalue, uuid_expected):
 
 
 def test_export():
+    """Test basic export"""
     import glob
     import os
     import os.path
@@ -1458,6 +1459,24 @@ def test_export():
     # pylint: disable=not-context-manager
     with runner.isolated_filesystem():
         result = runner.invoke(export, [os.path.join(cwd, CLI_PHOTOS_DB), ".", "-V"])
+        assert result.exit_code == 0
+        files = glob.glob("*")
+        assert sorted(files) == sorted(CLI_EXPORT_FILENAMES)
+
+def test_export_multiprocess():
+    """Test basic export with --multiprocess"""
+    import glob
+    import os
+    import os.path
+
+    import osxphotos
+    from osxphotos.cli import export
+
+    runner = CliRunner()
+    cwd = os.getcwd()
+    # pylint: disable=not-context-manager
+    with runner.isolated_filesystem():
+        result = runner.invoke(export, [os.path.join(cwd, CLI_PHOTOS_DB), ".", "-V", "--multiprocess", "2"])
         assert result.exit_code == 0
         files = glob.glob("*")
         assert sorted(files) == sorted(CLI_EXPORT_FILENAMES)
