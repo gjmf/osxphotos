@@ -507,7 +507,7 @@ class PhotoExporter:
             preview_name = (
                 preview_name
                 if options.overwrite or options.update
-                else pathlib.Path(increment_filename(preview_name))
+                else pathlib.Path(increment_filename(preview_name, lock=True))
             )
             all_results += self._export_photo(
                 preview_path,
@@ -519,6 +519,13 @@ class PhotoExporter:
 
         if options.touch_file:
             all_results += self._touch_files(all_results, options)
+
+        # if src was missing, there will be a lock file for dest that needs cleaning up
+        try:
+            lock_file = dest.parent / f".{dest.name}.lock"
+            self.fileutil.unlink(lock_file)
+        except Exception:
+            pass
 
         return all_results
 
@@ -578,7 +585,9 @@ class PhotoExporter:
         # if file1.png exists and exporting file1.jpeg,
         # dest will be file1 (1).jpeg even though file1.jpeg doesn't exist to prevent sidecar collision
         if options.increment and not options.update and not options.overwrite:
-            return pathlib.Path(increment_filename(dest))
+            return pathlib.Path(
+                increment_filename(dest, lock=True, dry_run=options.dry_run)
+            )
 
         # if update and file exists, need to check to see if it's the write file by checking export db
         if options.update and dest.exists() and src:
@@ -621,7 +630,9 @@ class PhotoExporter:
                         break
                 else:
                     # increment the destination file
-                    dest = pathlib.Path(increment_filename(dest))
+                    dest = pathlib.Path(
+                        increment_filename(dest, lock=True, dry_run=options.dry_run)
+                    )
 
         # either dest was updated in the if clause above or not updated at all
         return dest
@@ -815,7 +826,9 @@ class PhotoExporter:
             raise ValueError("Edited version requested but photo has no adjustments")
 
         dest = self._temp_dir_path / self.photo.original_filename
-        dest = pathlib.Path(increment_filename(dest))
+        dest = pathlib.Path(
+            increment_filename(dest, lock=True, dry_run=options.dry_run)
+        )
 
         # export live_photo .mov file?
         live_photo = bool(options.live_photo and self.photo.live_photo)
@@ -915,7 +928,7 @@ class PhotoExporter:
         """Copies filepath to a temp file preserving access and modification times"""
         filepath = pathlib.Path(filepath)
         dest = self._temp_dir_path / filepath.name
-        dest = increment_filename(dest)
+        dest = increment_filename(dest, lock=True)
         self.fileutil.copy(filepath, dest)
         stat = os.stat(filepath)
         self.fileutil.utime(dest, (stat.st_atime, stat.st_mtime))
@@ -1080,7 +1093,9 @@ class PhotoExporter:
                     # convert to a temp file before copying
                     tmp_file = increment_filename(
                         self._temp_dir_path
-                        / f"{pathlib.Path(src).stem}_converted_to_jpeg.jpeg"
+                        / f"{pathlib.Path(src).stem}_converted_to_jpeg.jpeg",
+                        lock=True,
+                        dry_run=options.dry_run,
                     )
                     fileutil.convert_to_jpeg(
                         src, tmp_file, compression_quality=options.jpeg_quality
@@ -1110,6 +1125,20 @@ class PhotoExporter:
             edited_stat=edited_stat,
             info_json=self.photo.json(),
         )
+
+        # clean up lock files
+        for file_ in set(
+            converted_to_jpeg_files
+            + exported_files
+            + update_new_files
+            + update_updated_files
+        ):
+            try:
+                file_ = pathlib.Path(file_)
+                lock_file = str(file_.parent / f".{file_.name}.lock")
+                fileutil.unlink(lock_file)
+            except Exception:
+                pass
 
         return ExportResults(
             converted_to_jpeg=converted_to_jpeg_files,

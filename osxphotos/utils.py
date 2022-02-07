@@ -17,13 +17,14 @@ import sys
 import unicodedata
 import urllib.parse
 from plistlib import load as plistload
-from typing import Callable, List, Union, Optional
+from typing import Callable, List, Optional, Union
 
 import CoreFoundation
 import objc
 from Foundation import NSFileManager, NSPredicate, NSString
 
 from ._constants import UNICODE_FORMAT
+from .path_utils import sanitize_filestem_with_count
 
 __all__ = [
     "dd_to_dms_str",
@@ -428,7 +429,10 @@ def normalize_unicode(value):
 
 
 def increment_filename_with_count(
-    filepath: Union[str, pathlib.Path], count: int = 0
+    filepath: Union[str, pathlib.Path],
+    count: int = 0,
+    lock: bool = False,
+    dry_run: bool = False,
 ) -> str:
     """Return filename (1).ext, etc if filename.ext exists
 
@@ -438,6 +442,8 @@ def increment_filename_with_count(
     Args:
         filepath: str or pathlib.Path; full path, including file name
         count: int; starting increment value
+        lock: bool; if True, create a lock file in form .filename.lock to prevent other processes from using the same filename
+        dry_run: bool; if True, don't actually create lock file
 
     Returns:
         tuple of new filepath (or same if not incremented), count
@@ -449,15 +455,32 @@ def increment_filename_with_count(
     dest_files = [f.stem.lower() for f in dest_files]
     dest_new = f"{dest.stem} ({count})" if count else dest.stem
     dest_new = normalize_fs_path(dest_new)
+    dest_new = sanitize_filestem_with_count(dest_new, dest.suffix)
+    if lock and not dry_run:
+        dest_lock = "." + dest_new + dest.suffix + ".lock"
+        dest_lock = dest.parent / dest_lock
+    else:
+        dest_lock = pathlib.Path("")
 
-    while dest_new.lower() in dest_files:
+    while dest_new.lower() in dest_files or (
+        lock and not dry_run and dest_lock.exists()
+    ):
         count += 1
         dest_new = normalize_fs_path(f"{dest.stem} ({count})")
+        dest_new = sanitize_filestem_with_count(dest_new, dest.suffix)
+        if lock:
+            dest_lock = "." + dest_new + dest.suffix + ".lock"
+            dest_lock = dest.parent / dest_lock
+    if lock and not dry_run:
+        dest_lock.touch()
     dest = dest.parent / f"{dest_new}{dest.suffix}"
+
     return normalize_fs_path(str(dest)), count
 
 
-def increment_filename(filepath: Union[str, pathlib.Path]) -> str:
+def increment_filename(
+    filepath: Union[str, pathlib.Path], lock: bool = False, dry_run: bool = False
+) -> str:
     """Return filename (1).ext, etc if filename.ext exists
 
         If file exists in filename's parent folder with same stem as filename,
@@ -465,13 +488,17 @@ def increment_filename(filepath: Union[str, pathlib.Path]) -> str:
 
     Args:
         filepath: str or pathlib.Path; full path, including file name
+        lock: bool; if True, creates a lock file in form .filename.lock to prevent other processes from using the same filename
+        dry_run: bool; if True, don't actually create lock file
 
     Returns:
         new filepath (or same if not incremented)
 
-    Note: This obviously is subject to race condition so using with caution.
+    Note: This obviously is subject to race condition so using with caution but using lock=True reduces the risk of race condition (but lock files must be cleaned up)
     """
-    new_filepath, _ = increment_filename_with_count(filepath)
+    new_filepath, _ = increment_filename_with_count(
+        filepath, lock=lock, dry_run=dry_run
+    )
     return new_filepath
 
 
