@@ -3262,7 +3262,7 @@ def export_photo_to_directory(
     results = ExportResults()
     # TODO: can be updated to let export do all the missing logic
     if export_original:
-        if missing and not preview_if_missing:
+        if missing and not any([preview_if_missing, download_missing, use_photos_export]):
             space = " " if not verbose else ""
             verbose_(
                 f"{space}Skipping missing photo {photo.original_filename} ({photo.uuid})"
@@ -3286,7 +3286,7 @@ def export_photo_to_directory(
         return results
     else:
         # exporting the edited version
-        if missing and not preview_if_missing:
+        if missing and not any([preview_if_missing, download_missing, use_photos_export]):
             space = " " if not verbose else ""
             verbose_(f"{space}Skipping missing edited photo for {filename}")
             results.missing.append(str(pathlib.Path(dest_path) / filename))
