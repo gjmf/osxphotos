@@ -6,7 +6,7 @@
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/osxphotos)
 [![Downloads](https://static.pepy.tech/personalized-badge/osxphotos?period=month&units=international_system&left_color=black&right_color=brightgreen&left_text=downloads/month)](https://pepy.tech/project/osxphotos)
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-35-orange.svg?style=flat)](#contributors)
+[![All Contributors](https://img.shields.io/badge/all_contributors-37-orange.svg?style=flat)](#contributors)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
 OSXPhotos provides the ability to interact with and query Apple's Photos.app library on macOS. You can query the Photos library database — for example, file name, file path, and metadata such as keywords/tags, persons/faces, albums, etc. You can also easily export both the original and edited photos.
@@ -1051,6 +1051,10 @@ Options:
   --exiftool-merge-persons        Merge any persons found in the original file
                                   with persons used for '--exiftool' and '--
                                   sidecar'.
+  --favorite-rating               When used with --exiftool or --sidecar, set
+                                  XMP:Rating=5 for photos marked as Favorite and
+                                  XMP:Rating=0 for non-Favorites. If not
+                                  specified, XMP:Rating is not set.
   --ignore-date-modified          If used with --exiftool or --sidecar, will
                                   ignore the photo modification date and set
                                   EXIF:ModifyDate to EXIF:DateTimeOriginal; this
@@ -1922,7 +1926,7 @@ Substitution                    Description
 {lf}                            A line feed: '\n', alias for {newline}
 {cr}                            A carriage return: '\r'
 {crlf}                          a carriage return + line feed: '\r\n'
-{osxphotos_version}             The osxphotos version, e.g. '0.50.6'
+{osxphotos_version}             The osxphotos version, e.g. '0.50.9'
 {osxphotos_cmd_line}            The full command line used to run osxphotos
 
 The following substitutions may result in multiple values. Thus if specified
@@ -2399,7 +2403,7 @@ The following template field substitutions are availabe for use the templating s
 |{lf}|A line feed: '\n', alias for {newline}|
 |{cr}|A carriage return: '\r'|
 |{crlf}|a carriage return + line feed: '\r\n'|
-|{osxphotos_version}|The osxphotos version, e.g. '0.50.6'|
+|{osxphotos_version}|The osxphotos version, e.g. '0.50.9'|
 |{osxphotos_cmd_line}|The full command line used to run osxphotos|
 |{album}|Album(s) photo is contained in|
 |{folder_album}|Folder path + album photo is contained in. e.g. 'Folder/Subfolder/Album' or just 'Album' if no enclosing folder|
@@ -2731,6 +2735,10 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
     <td align="center"><a href="https://github.com/ahti123"><img src="https://avatars.githubusercontent.com/u/22232632?v=4?s=75" width="75px;" alt=""/><br /><sub><b>Ahti Liin</b></sub></a><br /><a href="https://github.com/RhetTbull/osxphotos/commits?author=ahti123" title="Code">💻</a> <a href="https://github.com/RhetTbull/osxphotos/issues?q=author%3Aahti123" title="Bug reports">🐛</a></td>
     <td align="center"><a href="https://github.com/xwu64"><img src="https://avatars.githubusercontent.com/u/10580396?v=4?s=75" width="75px;" alt=""/><br /><sub><b>Xiaoliang Wu</b></sub></a><br /><a href="https://github.com/RhetTbull/osxphotos/commits?author=xwu64" title="Code">💻</a></td>
     <td align="center"><a href="https://github.com/nullpointerninja"><img src="https://avatars.githubusercontent.com/u/62975432?v=4?s=75" width="75px;" alt=""/><br /><sub><b>nullpointerninja</b></sub></a><br /><a href="https://github.com/RhetTbull/osxphotos/issues?q=author%3Anullpointerninja" title="Bug reports">🐛</a></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="https://github.com/infused-kim"><img src="https://avatars.githubusercontent.com/u/7404004?v=4?s=75" width="75px;" alt=""/><br /><sub><b>Kim</b></sub></a><br /><a href="#ideas-infused-kim" title="Ideas, Planning, & Feedback">🤔</a></td>
+    <td align="center"><a href="https://github.com/Se7enair"><img src="https://avatars.githubusercontent.com/u/1680106?v=4?s=75" width="75px;" alt=""/><br /><sub><b>Christoph</b></sub></a><br /><a href="#ideas-Se7enair" title="Ideas, Planning, & Feedback">🤔</a></td>
   </tr>
 </table>
 
