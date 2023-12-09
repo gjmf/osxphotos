@@ -3,7 +3,7 @@ cogapp>=3.3.0,<4.0.0
 furo
 m2r2
 pdbpp
-pyinstaller==4.10
+pyinstaller==5.13.1
 pytest-mock
 pytest==7.0.1
 Sphinx
